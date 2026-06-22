@@ -13,7 +13,7 @@ if (keyPropsFile.exists()) keyPropsFile.inputStream().use { keyProps.load(it) }
 
 android {
     namespace = "com.vel.micify"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = "27.0.12077973"
 
     compileOptions {

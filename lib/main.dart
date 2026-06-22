@@ -117,7 +117,7 @@ class MicifyHome extends StatefulWidget {
   State<MicifyHome> createState() => _MicifyHomeState();
 }
 
-class _MicifyHomeState extends State<MicifyHome> {
+class _MicifyHomeState extends State<MicifyHome> with TickerProviderStateMixin {
 
   // UI state
   bool _isRunning = false;
@@ -148,6 +148,9 @@ class _MicifyHomeState extends State<MicifyHome> {
   // Kids mode extras
   final _tts = FlutterTts();
   late final ConfettiController _confetti;
+  late final ConfettiController _stars;
+  late final AnimationController _flashCtrl;
+  late final Animation<double> _flashAnim;
 
   // Mic source selection
   _MicSource _micSource = _MicSource.builtin;
@@ -157,8 +160,16 @@ class _MicifyHomeState extends State<MicifyHome> {
   void initState() {
     super.initState();
     _confetti = ConfettiController(duration: const Duration(seconds: 2));
+    _stars = ConfettiController(duration: const Duration(seconds: 3));
+    _flashCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _flashAnim = Tween<double>(begin: 0, end: 0.35).animate(
+      CurvedAnimation(parent: _flashCtrl, curve: Curves.easeOut),
+    );
     _tts.setSpeechRate(0.45);
-    _tts.setPitch(1.4); // slightly high pitch sounds playful for kids
+    _tts.setPitch(1.4);
     _requestPermissions();
     _loadAvailableSources();
     HardwareKeyboard.instance.addHandler(_onKey);
@@ -469,6 +480,8 @@ class _MicifyHomeState extends State<MicifyHome> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onKey);
     _confetti.dispose();
+    _stars.dispose();
+    _flashCtrl.dispose();
     _tts.stop();
     _stop();
     super.dispose();
@@ -525,23 +538,66 @@ class _MicifyHomeState extends State<MicifyHome> {
   }
 
   Widget _buildKidsTab(ThemeData theme) {
-    return _buildBackground(
-      child: Stack(
-        children: [
-          // Confetti fires from the top-centre on Loud tap
-          Align(
-            alignment: Alignment.topCenter,
-            child: ConfettiWidget(
-              confettiController: _confetti,
-              blastDirectionality: BlastDirectionality.explosive,
-              numberOfParticles: 40,
-              gravity: 0.3,
-              colors: const [
-                Color(0xFF7C4DFF), Color(0xFFFF9800), Color(0xFFFFC107),
-                Color(0xFF42A5F5), Color(0xFFFF5722), Color(0xFF66BB6A),
-              ],
+    final selectedEffect = _voiceEffects.firstWhere(
+      (e) => e.rate == _pitchRate,
+      orElse: () => _voiceEffects.first,
+    );
+    return Stack(
+      children: [
+        // Background colour shift — tints to effect colour when relay is running
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 500),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: _isRunning
+                  ? [
+                      Color.lerp(_kBgTop, selectedEffect.color, 0.18)!,
+                      Color.lerp(_kBgBottom, selectedEffect.color, 0.12)!,
+                    ]
+                  : [_kBgTop, _kBgBottom],
             ),
           ),
+        ),
+        // Monster flash — red overlay
+        AnimatedBuilder(
+          animation: _flashAnim,
+          builder: (_, __) => _flashAnim.value > 0
+              ? Opacity(
+                  opacity: _flashAnim.value,
+                  child: Container(color: Colors.red),
+                )
+              : const SizedBox.shrink(),
+        ),
+        // Star shower — Kid / Chipmunk
+        Align(
+          alignment: Alignment.topCenter,
+          child: ConfettiWidget(
+            confettiController: _stars,
+            blastDirectionality: BlastDirectionality.explosive,
+            numberOfParticles: 30,
+            gravity: 0.2,
+            colors: const [
+              Color(0xFFFFC107), Color(0xFFFFEB3B), Color(0xFFFFFFFF),
+              Color(0xFF81D4FA), Color(0xFFF48FB1),
+            ],
+          ),
+        ),
+        // Confetti fires from the top-centre on Loud tap
+        Align(
+          alignment: Alignment.topCenter,
+          child: ConfettiWidget(
+            confettiController: _confetti,
+            blastDirectionality: BlastDirectionality.explosive,
+            numberOfParticles: 40,
+            gravity: 0.3,
+            colors: const [
+              Color(0xFF7C4DFF), Color(0xFFFF9800), Color(0xFFFFC107),
+              Color(0xFF42A5F5), Color(0xFFFF5722), Color(0xFF66BB6A),
+            ],
+          ),
+        ),
           SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
@@ -563,8 +619,15 @@ class _MicifyHomeState extends State<MicifyHome> {
 
               const SizedBox(height: 24),
 
-              // Bar visualiser
-              _BarVisualiser(level: _volumeLevel, isRunning: _isRunning),
+              // Bar visualiser — tints to selected effect colour
+              _BarVisualiser(
+                level: _volumeLevel,
+                isRunning: _isRunning,
+                accentColor: _voiceEffects
+                    .firstWhere((e) => e.rate == _pitchRate,
+                        orElse: () => _voiceEffects.first)
+                    .color,
+              ),
 
               const SizedBox(height: 24),
 
@@ -582,8 +645,32 @@ class _MicifyHomeState extends State<MicifyHome> {
                         setState(() => _pitchRate = e.rate);
                         _pushSettings();
                         _tts.speak(e.label);
+                        // Monster — red screen flash
+                        if (e.label == 'Monster') {
+                          _flashCtrl.forward().then((_) => _flashCtrl.reverse());
+                        }
+                        // Kid / Chipmunk — star shower
+                        if (e.label == 'Kid' || e.label == 'Chipmunk') {
+                          _stars.play();
+                        }
                       },
-                      child: AnimatedContainer(
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          // Bouncing emoji above selected card
+                          if (selected)
+                            Positioned(
+                              top: -18,
+                              left: 0,
+                              right: 0,
+                              child: Center(
+                                child: _BounceWidget(
+                                  key: ValueKey(e.label),
+                                  child: Icon(e.icon, size: 20, color: e.color),
+                                ),
+                              ),
+                            ),
+                      AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
                         decoration: BoxDecoration(
                           color: selected
@@ -614,6 +701,8 @@ class _MicifyHomeState extends State<MicifyHome> {
                           ],
                         ),
                       ),
+                        ], // Stack children
+                      ), // Stack
                     );
                   }).toList(),
                 ),
@@ -666,8 +755,7 @@ class _MicifyHomeState extends State<MicifyHome> {
         ),
       ),
         ],
-      ),
-    );
+      );
   }
 
   Widget _buildRelayTab(ThemeData theme) {
@@ -1078,9 +1166,14 @@ class _MicButtonState extends State<_MicButton> with SingleTickerProviderStateMi
 
 // Bar visualiser — 20 bars driven by volume level
 class _BarVisualiser extends StatefulWidget {
-  const _BarVisualiser({required this.level, required this.isRunning});
+  const _BarVisualiser({
+    required this.level,
+    required this.isRunning,
+    this.accentColor = _kAccent,
+  });
   final double level;
   final bool isRunning;
+  final Color accentColor;
 
   @override
   State<_BarVisualiser> createState() => _BarVisualiserState();
@@ -1129,7 +1222,7 @@ class _BarVisualiserState extends State<_BarVisualiser> with SingleTickerProvide
         crossAxisAlignment: CrossAxisAlignment.end,
         children: List.generate(_bars.length, (i) {
           final h = 8 + _bars[i] * 40;
-          final color = Color.lerp(_kAccent, Colors.pinkAccent, _bars[i])!
+          final color = Color.lerp(widget.accentColor, Colors.pinkAccent, _bars[i])!
               .withOpacity(0.85);
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 2),
@@ -1347,6 +1440,51 @@ class _ToggleRow extends StatelessWidget {
           activeColor: theme.colorScheme.primary,
         ),
       ],
+    );
+  }
+}
+
+// Bouncing animation for selected Kids effect icon
+class _BounceWidget extends StatefulWidget {
+  const _BounceWidget({super.key, required this.child});
+  final Widget child;
+
+  @override
+  State<_BounceWidget> createState() => _BounceWidgetState();
+}
+
+class _BounceWidgetState extends State<_BounceWidget>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    )..repeat(reverse: true);
+    _anim = Tween<double>(begin: 0, end: -6).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (_, child) => Transform.translate(
+        offset: Offset(0, _anim.value),
+        child: child,
+      ),
+      child: widget.child,
     );
   }
 }
